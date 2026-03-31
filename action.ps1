@@ -108,6 +108,23 @@ Function ProcessSourceFile()
     $content | Set-Content -Path $outputPath
 }
 
+Function ConvertToWikiFileName()
+{
+    [cmdletbinding()]
+    param([string]$name)
+
+    if (-not $name)
+    {
+        return $name
+    }
+
+    $normalizedName = $name.Normalize([System.Text.NormalizationForm]::FormC)
+    $normalizedName = $normalizedName -replace "[^\p{L}\p{M}\p{N}\s.(){}_!?-]", ""
+    $normalizedName = $normalizedName -replace " ", "-"
+
+    return $normalizedName
+}
+
 Function GetOutputFileNameFromFile()
 {
     [cmdletbinding()]
@@ -119,9 +136,7 @@ Function GetOutputFileNameFromFile()
         $headerMatch = [regex]::match($firstLine, "^#\s+(.*)$")
         if ($headerMatch.Success)
         {
-            $filename = $headerMatch.Groups[1].Value
-            $filename = $filename -replace " ", "-"
-            $filename = $filename -replace "[^A-Za-z0-9\s.(){}_!?-]", ""
+            $filename = ConvertToWikiFileName $headerMatch.Groups[1].Value
 
             return @{
                 FileName = "$filename.md";
