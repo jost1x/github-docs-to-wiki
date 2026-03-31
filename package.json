@@ -1,15 +1,21 @@
 {
-  "name": "invoke-pwsh",
+  "name": "github-docs-to-wiki",
   "version": "1.0.0",
-  "description": "Invoke PWSH-based GitHub Action.",
-  "main": "invoke-pwsh.js",
+  "description": "Sync markdown documentation files in a repository to its GitHub wiki.",
+  "main": "_init/index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "tsc -p tsconfig.json && ncc build dist/index.js -o _init",
+    "test": "npm run build && node --test tests/index.test.js"
   },
   "author": "EBekker",
   "license": "MIT",
   "dependencies": {
     "@actions/core": "^1.9.1",
     "@actions/exec": "^1.0.4"
+  },
+  "devDependencies": {
+    "@types/node": "^24.6.0",
+    "@vercel/ncc": "^0.38.3",
+    "typescript": "^5.9.3"
   }
 }

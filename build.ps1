@@ -7,4 +7,4 @@ if ($UpgradePackages) {
     & npm upgrade "@actions/exec"
 }
 
-ncc build .\invoke-pwsh.js -o _init
+& npm run build
