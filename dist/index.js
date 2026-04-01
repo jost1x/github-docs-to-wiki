@@ -33,73 +33,90 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.updateFileLinks = exports.getOutputFileNameFromFile = exports.convertToWikiFileName = void 0;
+exports.updateFileLinks = exports.getOutputFileNameFromPath = exports.convertToWikiFileName = exports.addGeneratedMarker = void 0;
 exports.run = run;
 const core = __importStar(require("@actions/core"));
 const path = __importStar(require("path"));
 const fs_utils_1 = require("./fs-utils");
 const git_1 = require("./git");
 const wiki_1 = require("./wiki");
-function parseBooleanInput(name) {
-    return core.getInput(name).trim().toLowerCase() === 'true';
-}
 var wiki_2 = require("./wiki");
+Object.defineProperty(exports, "addGeneratedMarker", { enumerable: true, get: function () { return wiki_2.addGeneratedMarker; } });
 Object.defineProperty(exports, "convertToWikiFileName", { enumerable: true, get: function () { return wiki_2.convertToWikiFileName; } });
-Object.defineProperty(exports, "getOutputFileNameFromFile", { enumerable: true, get: function () { return wiki_2.getOutputFileNameFromFile; } });
+Object.defineProperty(exports, "getOutputFileNameFromPath", { enumerable: true, get: function () { return wiki_2.getOutputFileNameFromPath; } });
 Object.defineProperty(exports, "updateFileLinks", { enumerable: true, get: function () { return wiki_2.updateFileLinks; } });
-async function run() {
-    const githubToken = core.getInput('githubToken', { required: true });
-    let defaultBranch = core.getInput('defaultBranch');
-    const rootDocsFolderInput = core.getInput('rootDocsFolder');
-    const convertRootReadmeToHomePage = parseBooleanInput('convertRootReadmeToHomePage');
-    const useHeaderForWikiName = parseBooleanInput('useHeaderForWikiName');
-    const customWikiFileHeaderFormat = core.getInput('customWikiFileHeaderFormat');
-    const customCommitMessageFormat = core.getInput('customCommitMessageFormat');
+function getRequiredRepositoryName() {
     const repositoryName = process.env.GITHUB_REPOSITORY;
     if (!repositoryName) {
         throw new Error('GITHUB_REPOSITORY is not set');
     }
-    const repositoryUrl = `https://github.com/${repositoryName}`;
-    const repositoryCloneUrl = `https://${githubToken}@github.com/${repositoryName}`;
-    const wikiRepoDirectory = `${repositoryName.split('/').pop()}.wiki`;
-    const sourceRepoDirectory = process.cwd();
-    const rootDocsFolder = rootDocsFolderInput || '.';
-    const rootDocsFolderDirs = rootDocsFolderInput ? rootDocsFolderInput.split('/') : [];
-    if (!defaultBranch) {
-        defaultBranch = await (0, git_1.getExecOutput)('git', ['branch', '--show-current'], sourceRepoDirectory);
+    return repositoryName;
+}
+function getBooleanInput(name) {
+    return core.getInput(name).trim().toLowerCase() === 'true';
+}
+async function resolveDefaultBranch(sourceRepoDirectory, defaultBranchInput) {
+    if (defaultBranchInput) {
+        return defaultBranchInput;
     }
-    const wikiRepoParentDirectory = path.dirname(sourceRepoDirectory);
-    const wikiRepoPath = path.join(wikiRepoParentDirectory, wikiRepoDirectory);
-    const context = {
+    return (0, git_1.getExecOutput)('git', ['branch', '--show-current'], sourceRepoDirectory);
+}
+async function createActionContext(repositoryName, rootDocsFolderInput) {
+    const sourceRepoDirectory = process.cwd();
+    const wikiRepoDirectory = `${repositoryName.split('/').pop()}.wiki`;
+    return {
         sourceRepoDirectory,
-        wikiRepoPath,
-        rootDocsFolder,
-        rootDocsFolderDirs,
-        convertRootReadmeToHomePage,
-        useHeaderForWikiName,
-        customWikiFileHeaderFormat,
-        customCommitMessageFormat,
-        repositoryUrl,
-        defaultBranch,
-        filenameToWikiNameMap: new Map(),
-        wikiNameToFileNameMap: new Map(),
+        wikiRepoPath: path.join(path.dirname(sourceRepoDirectory), wikiRepoDirectory),
+        rootDocsFolderDirs: rootDocsFolderInput
+            ? rootDocsFolderInput.split('/').filter((segment) => segment.length > 0)
+            : [],
+        convertRootReadmeToHomePage: getBooleanInput('convertRootReadmeToHomePage'),
+        customWikiFileHeaderFormat: core.getInput('customWikiFileHeaderFormat'),
+        customCommitMessageFormat: core.getInput('customCommitMessageFormat'),
+        repositoryUrl: `https://github.com/${repositoryName}`,
+        defaultBranch: await resolveDefaultBranch(sourceRepoDirectory, core.getInput('defaultBranch')),
+        sourceFileToWikiFileNameMap: new Map(),
+        wikiFileNameToSourceFileMap: new Map(),
     };
-    await (0, git_1.execCommand)('git', ['config', '--global', 'user.email', 'action@github.com']);
-    await (0, git_1.execCommand)('git', ['config', '--global', 'user.name', 'GitHub Action']);
+}
+async function cloneWikiRepo(wikiRepoParentDirectory, repositoryName, githubToken) {
     core.info('Cloning wiki repo...');
-    await (0, git_1.execCommand)('git', ['clone', `${repositoryCloneUrl}.wiki.git`], {
+    await (0, git_1.execCommand)('git', ['clone', `https://${githubToken}@github.com/${repositoryName}.wiki.git`], {
         cwd: wikiRepoParentDirectory,
     });
-    await (0, fs_utils_1.clearDirectory)(wikiRepoPath, new Set(['.git']));
+}
+async function syncWikiFiles(context, docsDirectoryPath) {
+    const keepPaths = await (0, wiki_1.buildManualWikiKeepSet)(context.wikiRepoPath);
+    await (0, fs_utils_1.clearDirectory)(context.wikiRepoPath, new Set(['.git']), async (targetPath) => keepPaths.has(targetPath));
     core.info('Processing source directory...');
-    await (0, wiki_1.processSourceDirectory)((0, fs_utils_1.resolveRootDocsFolder)(sourceRepoDirectory, rootDocsFolder), [], context);
-    core.info('Post-processing wiki files...');
-    await (0, wiki_1.processWikiDirectory)(wikiRepoPath, context);
-    const commitMessage = await (0, git_1.getWikiCommitMessage)(context);
+    await (0, wiki_1.buildSourceFileMap)(docsDirectoryPath, [], context);
+    await (0, wiki_1.processSourceDirectory)(docsDirectoryPath, [], context);
+}
+async function publishWikiChanges(context) {
     core.info('Pushing wiki');
-    await (0, git_1.execCommand)('git', ['add', '.'], { cwd: wikiRepoPath });
-    await (0, git_1.execCommand)('git', ['commit', '-am', commitMessage], { cwd: wikiRepoPath });
-    await (0, git_1.execCommand)('git', ['push'], { cwd: wikiRepoPath });
+    await (0, git_1.execCommand)('git', ['add', '.'], { cwd: context.wikiRepoPath });
+    if (!(await (0, git_1.hasStagedChanges)(context.wikiRepoPath))) {
+        core.info('No wiki changes to publish');
+        return;
+    }
+    await (0, git_1.execCommand)('git', ['commit', '-am', await (0, git_1.getWikiCommitMessage)(context)], {
+        cwd: context.wikiRepoPath,
+    });
+    await (0, git_1.execCommand)('git', ['push'], { cwd: context.wikiRepoPath });
+}
+async function run() {
+    const repositoryName = getRequiredRepositoryName();
+    const githubToken = core.getInput('githubToken', { required: true });
+    const rootDocsFolderInput = core.getInput('rootDocsFolder');
+    const rootDocsFolder = rootDocsFolderInput || '.';
+    const context = await createActionContext(repositoryName, rootDocsFolderInput);
+    const docsDirectoryPath = (0, fs_utils_1.resolveRootDocsFolder)(context.sourceRepoDirectory, rootDocsFolder);
+    const wikiRepoParentDirectory = path.dirname(context.sourceRepoDirectory);
+    await (0, git_1.execCommand)('git', ['config', '--global', 'user.email', 'action@github.com']);
+    await (0, git_1.execCommand)('git', ['config', '--global', 'user.name', 'GitHub Action']);
+    await cloneWikiRepo(wikiRepoParentDirectory, repositoryName, githubToken);
+    await syncWikiFiles(context, docsDirectoryPath);
+    await publishWikiChanges(context);
 }
 if (require.main === module) {
     run().catch((error) => {

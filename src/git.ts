@@ -78,3 +78,8 @@ export async function getWikiCommitMessage(context: ActionContext): Promise<stri
 
     return commitMessage.replace(SHA_SHORT_TOKEN, shaShort);
 }
+
+export async function hasStagedChanges(cwd: string): Promise<boolean> {
+    const output = await getExecOutput('git', ['diff', '--cached', '--name-only'], cwd);
+    return output.length > 0;
+}

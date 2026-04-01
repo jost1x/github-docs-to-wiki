@@ -21,11 +21,6 @@ inputs:
     required: false
     default: false
 
-  useHeaderForWikiName:
-    description: If true, names wiki pages according to the top header of the source file (using `#`)
-    required: false
-    default: false
-
   customWikiFileHeaderFormat:
     description: |
       If set, inserts a header at the top of each wiki file with the given format

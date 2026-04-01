@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.execCommand = execCommand;
 exports.getExecOutput = getExecOutput;
 exports.getWikiCommitMessage = getWikiCommitMessage;
+exports.hasStagedChanges = hasStagedChanges;
 const exec = __importStar(require("@actions/exec"));
 const fs_utils_1 = require("./fs-utils");
 const COMMIT_MESSAGE_TOKEN = /\{commitMessage\}/g;
@@ -79,4 +80,8 @@ async function getWikiCommitMessage(context) {
     commitMessage = commitMessage.replace(SHA_FULL_TOKEN, shaFull);
     const shaShort = await getExecOutput('git', ['rev-parse', '--short', 'HEAD'], context.sourceRepoDirectory);
     return commitMessage.replace(SHA_SHORT_TOKEN, shaShort);
+}
+async function hasStagedChanges(cwd) {
+    const output = await getExecOutput('git', ['diff', '--cached', '--name-only'], cwd);
+    return output.length > 0;
 }

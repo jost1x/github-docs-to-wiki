@@ -41,7 +41,6 @@ exports.writeLines = writeLines;
 exports.clearDirectory = clearDirectory;
 exports.getSortedEntries = getSortedEntries;
 exports.stripMarkdownExtension = stripMarkdownExtension;
-exports.replaceAllLiteral = replaceAllLiteral;
 exports.resolveRootDocsFolder = resolveRootDocsFolder;
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
@@ -72,25 +71,35 @@ async function readLines(filePath) {
 async function writeLines(filePath, content) {
     await fs.promises.writeFile(filePath, joinLines(content), 'utf8');
 }
-async function removePath(targetPath) {
+async function clearPath(targetPath, keepNames, shouldKeepPath) {
+    if (shouldKeepPath && (await shouldKeepPath(targetPath))) {
+        return true;
+    }
     const stats = await fs.promises.lstat(targetPath);
     if (stats.isDirectory() && !stats.isSymbolicLink()) {
         const entries = await fs.promises.readdir(targetPath);
+        let hasKeptChildren = false;
         for (const entry of entries) {
-            await removePath(path.join(targetPath, entry));
+            const childPath = path.join(targetPath, entry);
+            const kept = await clearPath(childPath, keepNames, shouldKeepPath);
+            hasKeptChildren = hasKeptChildren || kept;
+        }
+        if (hasKeptChildren) {
+            return true;
         }
         await fs.promises.rmdir(targetPath);
-        return;
+        return false;
     }
     await fs.promises.unlink(targetPath);
+    return false;
 }
-async function clearDirectory(directoryPath, keepNames) {
+async function clearDirectory(directoryPath, keepNames, shouldKeepPath) {
     const entries = await fs.promises.readdir(directoryPath);
     for (const entry of entries) {
         if (keepNames.has(entry)) {
             continue;
         }
-        await removePath(path.join(directoryPath, entry));
+        await clearPath(path.join(directoryPath, entry), keepNames, shouldKeepPath);
     }
 }
 async function getSortedEntries(directoryPath) {
@@ -99,9 +108,6 @@ async function getSortedEntries(directoryPath) {
 }
 function stripMarkdownExtension(fileName) {
     return fileName.replace(/\.md$/iu, '');
-}
-function replaceAllLiteral(value, search, replacement) {
-    return value.split(search).join(replacement);
 }
 function resolveRootDocsFolder(sourceRepoDirectory, rootDocsFolder) {
     const segments = rootDocsFolder.split('/').filter((segment) => segment.length > 0);

@@ -48,7 +48,6 @@ exports.writeLines = writeLines;
 exports.clearDirectory = clearDirectory;
 exports.getSortedEntries = getSortedEntries;
 exports.stripMarkdownExtension = stripMarkdownExtension;
-exports.replaceAllLiteral = replaceAllLiteral;
 exports.resolveRootDocsFolder = resolveRootDocsFolder;
 const fs = __importStar(__nccwpck_require__(896));
 const path = __importStar(__nccwpck_require__(928));
@@ -79,25 +78,35 @@ async function readLines(filePath) {
 async function writeLines(filePath, content) {
     await fs.promises.writeFile(filePath, joinLines(content), 'utf8');
 }
-async function removePath(targetPath) {
+async function clearPath(targetPath, keepNames, shouldKeepPath) {
+    if (shouldKeepPath && (await shouldKeepPath(targetPath))) {
+        return true;
+    }
     const stats = await fs.promises.lstat(targetPath);
     if (stats.isDirectory() && !stats.isSymbolicLink()) {
         const entries = await fs.promises.readdir(targetPath);
+        let hasKeptChildren = false;
         for (const entry of entries) {
-            await removePath(path.join(targetPath, entry));
+            const childPath = path.join(targetPath, entry);
+            const kept = await clearPath(childPath, keepNames, shouldKeepPath);
+            hasKeptChildren = hasKeptChildren || kept;
+        }
+        if (hasKeptChildren) {
+            return true;
         }
         await fs.promises.rmdir(targetPath);
-        return;
+        return false;
     }
     await fs.promises.unlink(targetPath);
+    return false;
 }
-async function clearDirectory(directoryPath, keepNames) {
+async function clearDirectory(directoryPath, keepNames, shouldKeepPath) {
     const entries = await fs.promises.readdir(directoryPath);
     for (const entry of entries) {
         if (keepNames.has(entry)) {
             continue;
         }
-        await removePath(path.join(directoryPath, entry));
+        await clearPath(path.join(directoryPath, entry), keepNames, shouldKeepPath);
     }
 }
 async function getSortedEntries(directoryPath) {
@@ -106,9 +115,6 @@ async function getSortedEntries(directoryPath) {
 }
 function stripMarkdownExtension(fileName) {
     return fileName.replace(/\.md$/iu, '');
-}
-function replaceAllLiteral(value, search, replacement) {
-    return value.split(search).join(replacement);
 }
 function resolveRootDocsFolder(sourceRepoDirectory, rootDocsFolder) {
     const segments = rootDocsFolder.split('/').filter((segment) => segment.length > 0);
@@ -160,6 +166,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.execCommand = execCommand;
 exports.getExecOutput = getExecOutput;
 exports.getWikiCommitMessage = getWikiCommitMessage;
+exports.hasStagedChanges = hasStagedChanges;
 const exec = __importStar(__nccwpck_require__(236));
 const fs_utils_1 = __nccwpck_require__(950);
 const COMMIT_MESSAGE_TOKEN = /\{commitMessage\}/g;
@@ -204,6 +211,10 @@ async function getWikiCommitMessage(context) {
     const shaShort = await getExecOutput('git', ['rev-parse', '--short', 'HEAD'], context.sourceRepoDirectory);
     return commitMessage.replace(SHA_SHORT_TOKEN, shaShort);
 }
+async function hasStagedChanges(cwd) {
+    const output = await getExecOutput('git', ['diff', '--cached', '--name-only'], cwd);
+    return output.length > 0;
+}
 
 
 /***/ }),
@@ -247,79 +258,396 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.updateFileLinks = exports.getOutputFileNameFromFile = exports.convertToWikiFileName = void 0;
+exports.updateFileLinks = exports.getOutputFileNameFromPath = exports.convertToWikiFileName = exports.addGeneratedMarker = void 0;
 exports.run = run;
 const core = __importStar(__nccwpck_require__(484));
 const path = __importStar(__nccwpck_require__(928));
 const fs_utils_1 = __nccwpck_require__(950);
 const git_1 = __nccwpck_require__(709);
 const wiki_1 = __nccwpck_require__(921);
-function parseBooleanInput(name) {
-    return core.getInput(name).trim().toLowerCase() === 'true';
-}
 var wiki_2 = __nccwpck_require__(921);
+Object.defineProperty(exports, "addGeneratedMarker", ({ enumerable: true, get: function () { return wiki_2.addGeneratedMarker; } }));
 Object.defineProperty(exports, "convertToWikiFileName", ({ enumerable: true, get: function () { return wiki_2.convertToWikiFileName; } }));
-Object.defineProperty(exports, "getOutputFileNameFromFile", ({ enumerable: true, get: function () { return wiki_2.getOutputFileNameFromFile; } }));
+Object.defineProperty(exports, "getOutputFileNameFromPath", ({ enumerable: true, get: function () { return wiki_2.getOutputFileNameFromPath; } }));
 Object.defineProperty(exports, "updateFileLinks", ({ enumerable: true, get: function () { return wiki_2.updateFileLinks; } }));
-async function run() {
-    const githubToken = core.getInput('githubToken', { required: true });
-    let defaultBranch = core.getInput('defaultBranch');
-    const rootDocsFolderInput = core.getInput('rootDocsFolder');
-    const convertRootReadmeToHomePage = parseBooleanInput('convertRootReadmeToHomePage');
-    const useHeaderForWikiName = parseBooleanInput('useHeaderForWikiName');
-    const customWikiFileHeaderFormat = core.getInput('customWikiFileHeaderFormat');
-    const customCommitMessageFormat = core.getInput('customCommitMessageFormat');
+function getRequiredRepositoryName() {
     const repositoryName = process.env.GITHUB_REPOSITORY;
     if (!repositoryName) {
         throw new Error('GITHUB_REPOSITORY is not set');
     }
-    const repositoryUrl = `https://github.com/${repositoryName}`;
-    const repositoryCloneUrl = `https://${githubToken}@github.com/${repositoryName}`;
-    const wikiRepoDirectory = `${repositoryName.split('/').pop()}.wiki`;
-    const sourceRepoDirectory = process.cwd();
-    const rootDocsFolder = rootDocsFolderInput || '.';
-    const rootDocsFolderDirs = rootDocsFolderInput ? rootDocsFolderInput.split('/') : [];
-    if (!defaultBranch) {
-        defaultBranch = await (0, git_1.getExecOutput)('git', ['branch', '--show-current'], sourceRepoDirectory);
+    return repositoryName;
+}
+function getBooleanInput(name) {
+    return core.getInput(name).trim().toLowerCase() === 'true';
+}
+async function resolveDefaultBranch(sourceRepoDirectory, defaultBranchInput) {
+    if (defaultBranchInput) {
+        return defaultBranchInput;
     }
-    const wikiRepoParentDirectory = path.dirname(sourceRepoDirectory);
-    const wikiRepoPath = path.join(wikiRepoParentDirectory, wikiRepoDirectory);
-    const context = {
+    return (0, git_1.getExecOutput)('git', ['branch', '--show-current'], sourceRepoDirectory);
+}
+async function createActionContext(repositoryName, rootDocsFolderInput) {
+    const sourceRepoDirectory = process.cwd();
+    const wikiRepoDirectory = `${repositoryName.split('/').pop()}.wiki`;
+    return {
         sourceRepoDirectory,
-        wikiRepoPath,
-        rootDocsFolder,
-        rootDocsFolderDirs,
-        convertRootReadmeToHomePage,
-        useHeaderForWikiName,
-        customWikiFileHeaderFormat,
-        customCommitMessageFormat,
-        repositoryUrl,
-        defaultBranch,
-        filenameToWikiNameMap: new Map(),
-        wikiNameToFileNameMap: new Map(),
+        wikiRepoPath: path.join(path.dirname(sourceRepoDirectory), wikiRepoDirectory),
+        rootDocsFolderDirs: rootDocsFolderInput
+            ? rootDocsFolderInput.split('/').filter((segment) => segment.length > 0)
+            : [],
+        convertRootReadmeToHomePage: getBooleanInput('convertRootReadmeToHomePage'),
+        customWikiFileHeaderFormat: core.getInput('customWikiFileHeaderFormat'),
+        customCommitMessageFormat: core.getInput('customCommitMessageFormat'),
+        repositoryUrl: `https://github.com/${repositoryName}`,
+        defaultBranch: await resolveDefaultBranch(sourceRepoDirectory, core.getInput('defaultBranch')),
+        sourceFileToWikiFileNameMap: new Map(),
+        wikiFileNameToSourceFileMap: new Map(),
     };
-    await (0, git_1.execCommand)('git', ['config', '--global', 'user.email', 'action@github.com']);
-    await (0, git_1.execCommand)('git', ['config', '--global', 'user.name', 'GitHub Action']);
+}
+async function cloneWikiRepo(wikiRepoParentDirectory, repositoryName, githubToken) {
     core.info('Cloning wiki repo...');
-    await (0, git_1.execCommand)('git', ['clone', `${repositoryCloneUrl}.wiki.git`], {
+    await (0, git_1.execCommand)('git', ['clone', `https://${githubToken}@github.com/${repositoryName}.wiki.git`], {
         cwd: wikiRepoParentDirectory,
     });
-    await (0, fs_utils_1.clearDirectory)(wikiRepoPath, new Set(['.git']));
+}
+async function syncWikiFiles(context, docsDirectoryPath) {
+    const keepPaths = await (0, wiki_1.buildManualWikiKeepSet)(context.wikiRepoPath);
+    await (0, fs_utils_1.clearDirectory)(context.wikiRepoPath, new Set(['.git']), async (targetPath) => keepPaths.has(targetPath));
     core.info('Processing source directory...');
-    await (0, wiki_1.processSourceDirectory)((0, fs_utils_1.resolveRootDocsFolder)(sourceRepoDirectory, rootDocsFolder), [], context);
-    core.info('Post-processing wiki files...');
-    await (0, wiki_1.processWikiDirectory)(wikiRepoPath, context);
-    const commitMessage = await (0, git_1.getWikiCommitMessage)(context);
+    await (0, wiki_1.buildSourceFileMap)(docsDirectoryPath, [], context);
+    await (0, wiki_1.processSourceDirectory)(docsDirectoryPath, [], context);
+}
+async function publishWikiChanges(context) {
     core.info('Pushing wiki');
-    await (0, git_1.execCommand)('git', ['add', '.'], { cwd: wikiRepoPath });
-    await (0, git_1.execCommand)('git', ['commit', '-am', commitMessage], { cwd: wikiRepoPath });
-    await (0, git_1.execCommand)('git', ['push'], { cwd: wikiRepoPath });
+    await (0, git_1.execCommand)('git', ['add', '.'], { cwd: context.wikiRepoPath });
+    if (!(await (0, git_1.hasStagedChanges)(context.wikiRepoPath))) {
+        core.info('No wiki changes to publish');
+        return;
+    }
+    await (0, git_1.execCommand)('git', ['commit', '-am', await (0, git_1.getWikiCommitMessage)(context)], {
+        cwd: context.wikiRepoPath,
+    });
+    await (0, git_1.execCommand)('git', ['push'], { cwd: context.wikiRepoPath });
+}
+async function run() {
+    const repositoryName = getRequiredRepositoryName();
+    const githubToken = core.getInput('githubToken', { required: true });
+    const rootDocsFolderInput = core.getInput('rootDocsFolder');
+    const rootDocsFolder = rootDocsFolderInput || '.';
+    const context = await createActionContext(repositoryName, rootDocsFolderInput);
+    const docsDirectoryPath = (0, fs_utils_1.resolveRootDocsFolder)(context.sourceRepoDirectory, rootDocsFolder);
+    const wikiRepoParentDirectory = path.dirname(context.sourceRepoDirectory);
+    await (0, git_1.execCommand)('git', ['config', '--global', 'user.email', 'action@github.com']);
+    await (0, git_1.execCommand)('git', ['config', '--global', 'user.name', 'GitHub Action']);
+    await cloneWikiRepo(wikiRepoParentDirectory, repositoryName, githubToken);
+    await syncWikiFiles(context, docsDirectoryPath);
+    await publishWikiChanges(context);
 }
 if (require.main === require.cache[eval('__filename')]) {
     run().catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
         core.setFailed(message);
     });
+}
+
+
+/***/ }),
+
+/***/ 757:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.updateFileLinks = updateFileLinks;
+const path = __importStar(__nccwpck_require__(928));
+const fs_utils_1 = __nccwpck_require__(950);
+const MARKDOWN_LINK_REGEX = /\[([^\]]+)\]\(([^)]+)\)/g;
+const EXTERNAL_LINK_REGEX = /^[a-z][a-z0-9+.-]*:/iu;
+function countParentSegments(linkPath) {
+    return linkPath.split('/').filter((segment) => segment === '..').length;
+}
+function normalizeWithinBase(baseSegments, linkPath) {
+    return path.posix.normalize(path.posix.join('/', ...baseSegments, linkPath)).replace(/^\/+/u, '');
+}
+function updateFileLinks(fileName, directories, content, repositoryUrl, defaultBranch, rootDocsFolderDirs, sourceFileToWikiFileNameMap) {
+    return content.map((line) => line.replace(MARKDOWN_LINK_REGEX, (_match, text, link) => {
+        const normalizedLink = link.toLowerCase();
+        const [linkPath, anchor = ''] = link.split('#', 2);
+        const anchorSuffix = anchor ? `#${anchor}` : '';
+        if (EXTERNAL_LINK_REGEX.test(normalizedLink) || link.startsWith('#')) {
+            return `[${text}](${link})`;
+        }
+        const isMarkdownLink = linkPath.toLowerCase().endsWith('.md');
+        const upDirs = countParentSegments(linkPath);
+        if (isMarkdownLink && upDirs <= directories.length) {
+            const targetSourcePath = normalizeWithinBase(directories, linkPath);
+            const wikiFileName = sourceFileToWikiFileNameMap.get(targetSourcePath);
+            if (!wikiFileName) {
+                throw new Error(`Relative link ${link} in ${fileName} does not exist`);
+            }
+            return `[${text}](${(0, fs_utils_1.stripMarkdownExtension)(wikiFileName)}${anchorSuffix})`;
+        }
+        const extraUpDirs = upDirs - directories.length;
+        if (extraUpDirs > rootDocsFolderDirs.length) {
+            throw new Error(`Relative link ${link} in ${fileName} does not exist`);
+        }
+        const baseSegments = rootDocsFolderDirs
+            .slice(0, rootDocsFolderDirs.length - Math.max(extraUpDirs, 0))
+            .concat(directories);
+        const absoluteLink = `${repositoryUrl}/blob/${defaultBranch}/` + normalizeWithinBase(baseSegments, linkPath);
+        return `[${text}](${absoluteLink})`;
+    }));
+}
+
+
+/***/ }),
+
+/***/ 244:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.KEEP_MANUAL_WIKI_MARKER = exports.GENERATED_WIKI_MARKER = void 0;
+exports.addGeneratedMarker = addGeneratedMarker;
+exports.buildManualWikiKeepSet = buildManualWikiKeepSet;
+exports.ensureWritableWikiTarget = ensureWritableWikiTarget;
+const fs = __importStar(__nccwpck_require__(896));
+const path = __importStar(__nccwpck_require__(928));
+const fs_utils_1 = __nccwpck_require__(950);
+const MARKDOWN_ASSET_LINK_REGEX = /!?\[[^\]]*]\(([^)]+)\)/g;
+const HTML_SOURCE_ATTRIBUTE_REGEX = /\b(?:src|href)=["']([^"']+)["']/giu;
+const EXTERNAL_LINK_REGEX = /^[a-z][a-z0-9+.-]*:/iu;
+exports.GENERATED_WIKI_MARKER = '<!-- wiki:generated -->';
+exports.KEEP_MANUAL_WIKI_MARKER = '<!-- wiki:keep-manual -->';
+async function pathStat(targetPath) {
+    try {
+        return await fs.promises.lstat(targetPath);
+    }
+    catch {
+        return undefined;
+    }
+}
+function isLocalWikiAssetLink(link) {
+    if (link.length === 0 || link.startsWith('#') || EXTERNAL_LINK_REGEX.test(link)) {
+        return false;
+    }
+    const [linkPath] = link.split('#', 2);
+    return linkPath.length > 0 && !linkPath.toLowerCase().endsWith('.md');
+}
+function resolveWikiRelativePath(baseDirectory, link) {
+    const [linkPath] = link.split('#', 2);
+    const normalizedPath = path.posix
+        .normalize(path.posix.join('/', baseDirectory, linkPath))
+        .replace(/^\/+/u, '');
+    if (!normalizedPath || normalizedPath.startsWith('..')) {
+        return undefined;
+    }
+    return normalizedPath;
+}
+function collectAssetLinksFromContent(content) {
+    const links = [];
+    for (const line of content) {
+        for (const match of line.matchAll(MARKDOWN_ASSET_LINK_REGEX)) {
+            links.push(match[1]);
+        }
+        for (const match of line.matchAll(HTML_SOURCE_ATTRIBUTE_REGEX)) {
+            links.push(match[1]);
+        }
+    }
+    return links;
+}
+function addGeneratedMarker(content) {
+    if (content[0] === exports.GENERATED_WIKI_MARKER) {
+        return content;
+    }
+    return [exports.GENERATED_WIKI_MARKER, '', ...content];
+}
+async function buildManualWikiKeepSet(wikiRepoPath) {
+    const keepPaths = new Set();
+    async function walk(directoryPath) {
+        const entries = await (0, fs_utils_1.getSortedEntries)(directoryPath);
+        for (const entry of entries) {
+            const entryPath = path.join(directoryPath, entry.name);
+            if (entry.isDirectory()) {
+                await walk(entryPath);
+                continue;
+            }
+            if (!entry.isFile() || entry.name.toLowerCase().endsWith('.md') === false) {
+                continue;
+            }
+            const content = await (0, fs_utils_1.readLines)(entryPath);
+            if (content.some((line) => line.includes(exports.KEEP_MANUAL_WIKI_MARKER)) === false) {
+                continue;
+            }
+            keepPaths.add(entryPath);
+            const baseDirectory = path.posix.dirname(path.relative(wikiRepoPath, entryPath));
+            for (const link of collectAssetLinksFromContent(content)) {
+                if (!isLocalWikiAssetLink(link)) {
+                    continue;
+                }
+                const resolvedRelativePath = resolveWikiRelativePath(baseDirectory, link);
+                if (!resolvedRelativePath) {
+                    continue;
+                }
+                keepPaths.add(path.join(wikiRepoPath, resolvedRelativePath));
+            }
+        }
+    }
+    await walk(wikiRepoPath);
+    return keepPaths;
+}
+async function ensureWritableWikiTarget(outputPath) {
+    const existingStats = await pathStat(outputPath);
+    if (!existingStats || existingStats.isDirectory()) {
+        return;
+    }
+    const content = await (0, fs_utils_1.readLines)(outputPath);
+    if (content.some((line) => line.includes(exports.KEEP_MANUAL_WIKI_MARKER))) {
+        throw new Error(`Wiki page ${path.basename(outputPath)} is marked with ${exports.KEEP_MANUAL_WIKI_MARKER} and cannot be overwritten by sync`);
+    }
+}
+
+
+/***/ }),
+
+/***/ 760:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.convertToWikiFileName = convertToWikiFileName;
+exports.getSourceRelativePath = getSourceRelativePath;
+exports.getRepoRelativePath = getRepoRelativePath;
+exports.getOutputFileNameFromPath = getOutputFileNameFromPath;
+const path = __importStar(__nccwpck_require__(928));
+const fs_utils_1 = __nccwpck_require__(950);
+const INVALID_WIKI_FILE_NAME_CHARS = /[^\p{L}\p{M}\p{N}\s.(){}_!?-]/gu;
+function convertToWikiFileName(name) {
+    if (!name) {
+        return name;
+    }
+    const normalizedName = name.normalize('NFC');
+    const sanitizedName = normalizedName.replace(INVALID_WIKI_FILE_NAME_CHARS, '');
+    return sanitizedName.replace(/ /gu, '-');
+}
+function getSourceRelativePath(fileName, directories) {
+    return path.posix.join(...directories, fileName);
+}
+function getRepoRelativePath(fileName, directories, rootDocsFolderDirs) {
+    return path.posix.join(...rootDocsFolderDirs, ...directories, fileName);
+}
+function getOutputFileNameFromPath(fileName, directories, convertRootReadmeToHomePage) {
+    const lowerFileName = fileName.toLowerCase();
+    if (convertRootReadmeToHomePage && directories.length === 0 && lowerFileName === 'readme.md') {
+        return 'Home.md';
+    }
+    const pathSegments = lowerFileName === 'readme.md' && directories.length > 0
+        ? directories
+        : directories.concat((0, fs_utils_1.stripMarkdownExtension)(fileName));
+    const wikiBaseName = pathSegments.map(convertToWikiFileName).join('--');
+    return `${wikiBaseName}.md`;
 }
 
 
@@ -364,158 +692,77 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.convertToWikiFileName = convertToWikiFileName;
-exports.getOutputFileNameFromFile = getOutputFileNameFromFile;
-exports.updateFileLinks = updateFileLinks;
+exports.getOutputFileNameFromPath = exports.convertToWikiFileName = exports.updateFileLinks = exports.buildManualWikiKeepSet = exports.addGeneratedMarker = void 0;
+exports.buildSourceFileMap = buildSourceFileMap;
 exports.processSourceDirectory = processSourceDirectory;
-exports.processWikiDirectory = processWikiDirectory;
 const core = __importStar(__nccwpck_require__(484));
-const fs = __importStar(__nccwpck_require__(896));
 const path = __importStar(__nccwpck_require__(928));
 const fs_utils_1 = __nccwpck_require__(950);
-const MARKDOWN_LINK_REGEX = /\[([^\]]+)\]\(([^)]+)\)/g;
-const INVALID_WIKI_FILE_NAME_CHARS = /[^\p{L}\p{M}\p{N}\s.(){}_!?-]/gu;
+const wiki_manual_1 = __nccwpck_require__(244);
+const wiki_links_1 = __nccwpck_require__(757);
+const wiki_paths_1 = __nccwpck_require__(760);
 const SOURCE_FILE_LINK_TOKEN = /\{sourceFileLink\}/g;
-function convertToWikiFileName(name) {
-    if (!name) {
-        return name;
+var wiki_manual_2 = __nccwpck_require__(244);
+Object.defineProperty(exports, "addGeneratedMarker", ({ enumerable: true, get: function () { return wiki_manual_2.addGeneratedMarker; } }));
+Object.defineProperty(exports, "buildManualWikiKeepSet", ({ enumerable: true, get: function () { return wiki_manual_2.buildManualWikiKeepSet; } }));
+var wiki_links_2 = __nccwpck_require__(757);
+Object.defineProperty(exports, "updateFileLinks", ({ enumerable: true, get: function () { return wiki_links_2.updateFileLinks; } }));
+var wiki_paths_2 = __nccwpck_require__(760);
+Object.defineProperty(exports, "convertToWikiFileName", ({ enumerable: true, get: function () { return wiki_paths_2.convertToWikiFileName; } }));
+Object.defineProperty(exports, "getOutputFileNameFromPath", ({ enumerable: true, get: function () { return wiki_paths_2.getOutputFileNameFromPath; } }));
+async function visitMarkdownFiles(directoryPath, directories, visitor) {
+    const entries = await (0, fs_utils_1.getSortedEntries)(directoryPath);
+    for (const entry of entries) {
+        if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.md')) {
+            continue;
+        }
+        await visitor(path.join(directoryPath, entry.name), entry.name, directories);
     }
-    const normalizedName = name.normalize('NFC');
-    const sanitizedName = normalizedName.replace(INVALID_WIKI_FILE_NAME_CHARS, '');
-    return sanitizedName.replace(/ /gu, '-');
-}
-function getOutputFileNameFromFile(content, useHeaderForWikiName) {
-    if (!useHeaderForWikiName || content.length === 0) {
-        return undefined;
+    for (const entry of entries) {
+        if (!entry.isDirectory()) {
+            continue;
+        }
+        await visitMarkdownFiles(path.join(directoryPath, entry.name), directories.concat(entry.name), visitor);
     }
-    const headerMatch = /^\uFEFF?#\s+(.*)$/u.exec(content[0]);
-    if (!headerMatch) {
-        return undefined;
-    }
-    const fileName = `${convertToWikiFileName(headerMatch[1])}.md`;
-    return {
-        fileName,
-        newContent: content.slice(1),
-    };
-}
-function updateFileLinks(fileName, directories, content, repositoryUrl, defaultBranch, rootDocsFolderDirs) {
-    return content.map((line) => line.replace(MARKDOWN_LINK_REGEX, (_match, text, link) => {
-        const normalizedLink = link.toLowerCase();
-        const [linkPath, anchor = ''] = link.split('#', 2);
-        const anchorSuffix = anchor ? `#${anchor}` : '';
-        if (normalizedLink.startsWith('http') || normalizedLink.startsWith('onenote')) {
-            return `[${text}](${link})`;
-        }
-        if (link.startsWith('#')) {
-            return `[${text}](${link})`;
-        }
-        let upDirs = 0;
-        const relativePath = [];
-        for (const part of linkPath.split('/')) {
-            if (part === '..') {
-                upDirs += 1;
-            }
-            else {
-                relativePath.push(part);
-            }
-        }
-        const isMarkdownLink = linkPath.toLowerCase().endsWith('.md');
-        if (upDirs <= directories.length && isMarkdownLink) {
-            const wikiPath = directories
-                .slice(0, directories.length - upDirs)
-                .concat(relativePath);
-            const wikiFileName = `${(0, fs_utils_1.stripMarkdownExtension)(wikiPath.join('__'))}${anchorSuffix}`;
-            return `[${text}](${wikiFileName})`;
-        }
-        const extraUpDirs = upDirs - directories.length;
-        if (extraUpDirs > rootDocsFolderDirs.length) {
-            throw new Error(`Relative link ${link} in ${fileName} does not exist`);
-        }
-        let relativePathFromRoot = rootDocsFolderDirs
-            .slice(0, rootDocsFolderDirs.length - extraUpDirs)
-            .join('/');
-        if (relativePathFromRoot) {
-            relativePathFromRoot += '/';
-        }
-        const absoluteLink = `${repositoryUrl}/blob/${defaultBranch}/` +
-            `${relativePathFromRoot}${relativePath.join('/')}`;
-        return `[${text}](${absoluteLink})`;
-    }));
 }
 function addCustomHeader(fileName, directories, content, context) {
-    const relativePath = `${context.rootDocsFolder}/${directories.join('/')}`;
-    const sourceFileLink = `${context.repositoryUrl}/blob/${context.defaultBranch}/` +
-        `${relativePath}/${fileName}`;
+    const relativePath = (0, wiki_paths_1.getRepoRelativePath)(fileName, directories, context.rootDocsFolderDirs);
+    const sourceFileLink = `${context.repositoryUrl}/blob/${context.defaultBranch}/${relativePath}`;
     const header = context.customWikiFileHeaderFormat.replace(SOURCE_FILE_LINK_TOKEN, sourceFileLink);
     return [header, '', '', ...content];
 }
 async function processSourceFile(sourceFilePath, fileName, directories, context) {
     core.debug(`Processing file ${sourceFilePath}`);
-    let outputFileName = directories.concat(fileName).join('__');
+    const sourceRelativePath = (0, wiki_paths_1.getSourceRelativePath)(fileName, directories);
+    const outputFileName = context.sourceFileToWikiFileNameMap.get(sourceRelativePath);
+    if (!outputFileName) {
+        throw new Error(`Missing wiki output name for ${sourceRelativePath}`);
+    }
     let content = await (0, fs_utils_1.readLines)(sourceFilePath);
-    content = updateFileLinks(fileName, directories, content, context.repositoryUrl, context.defaultBranch, context.rootDocsFolderDirs);
-    const override = getOutputFileNameFromFile(content, context.useHeaderForWikiName);
-    if (context.convertRootReadmeToHomePage &&
-        directories.length === 0 &&
-        fileName.toLowerCase() === 'readme.md') {
-        outputFileName = 'Home.md';
-    }
-    else if (override) {
-        core.debug(`Using overridden file name ${override.fileName}`);
-        const existingFileName = context.wikiNameToFileNameMap.get(override.fileName);
-        if (existingFileName) {
-            throw new Error(`Overridden file name ${override.fileName} is already in use by ${existingFileName}`);
-        }
-        context.wikiNameToFileNameMap.set(override.fileName, outputFileName);
-        context.filenameToWikiNameMap.set(outputFileName, override.fileName);
-        outputFileName = override.fileName;
-        content = override.newContent;
-    }
+    content = (0, wiki_links_1.updateFileLinks)(fileName, directories, content, context.repositoryUrl, context.defaultBranch, context.rootDocsFolderDirs, context.sourceFileToWikiFileNameMap);
     if (context.customWikiFileHeaderFormat && fileName.toLowerCase() !== '_sidebar.md') {
         content = addCustomHeader(fileName, directories, content, context);
     }
     const outputPath = path.join(context.wikiRepoPath, outputFileName);
-    await (0, fs_utils_1.writeLines)(outputPath, content);
+    await (0, wiki_manual_1.ensureWritableWikiTarget)(outputPath);
+    await (0, fs_utils_1.writeLines)(outputPath, (0, wiki_manual_1.addGeneratedMarker)(content));
+}
+async function buildSourceFileMap(directoryPath, directories, context) {
+    await visitMarkdownFiles(directoryPath, directories, async (_sourceFilePath, fileName, fileDirectories) => {
+        const sourceRelativePath = (0, wiki_paths_1.getSourceRelativePath)(fileName, fileDirectories);
+        const outputFileName = (0, wiki_paths_1.getOutputFileNameFromPath)(fileName, fileDirectories, context.convertRootReadmeToHomePage);
+        const existingSourceFile = context.wikiFileNameToSourceFileMap.get(outputFileName);
+        if (existingSourceFile) {
+            throw new Error(`Wiki file name ${outputFileName} would be generated by both ${existingSourceFile} and ${sourceRelativePath}`);
+        }
+        context.sourceFileToWikiFileNameMap.set(sourceRelativePath, outputFileName);
+        context.wikiFileNameToSourceFileMap.set(outputFileName, sourceRelativePath);
+    });
 }
 async function processSourceDirectory(directoryPath, directories, context) {
-    const entries = await (0, fs_utils_1.getSortedEntries)(directoryPath);
-    for (const entry of entries) {
-        if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.md')) {
-            continue;
-        }
-        await processSourceFile(path.join(directoryPath, entry.name), entry.name, directories, context);
-    }
-    for (const entry of entries) {
-        if (!entry.isDirectory()) {
-            continue;
-        }
-        await processSourceDirectory(path.join(directoryPath, entry.name), directories.concat(entry.name), context);
-    }
-}
-async function processWikiFile(filePath, context) {
-    core.debug(`Processing file ${path.basename(filePath)}`);
-    let content = await fs.promises.readFile(filePath, 'utf8');
-    for (const [originalFileName, newFileName] of context.filenameToWikiNameMap.entries()) {
-        const originalLink = (0, fs_utils_1.stripMarkdownExtension)(originalFileName);
-        const updatedLink = (0, fs_utils_1.stripMarkdownExtension)(newFileName);
-        content = (0, fs_utils_1.replaceAllLiteral)(content, originalLink, updatedLink);
-    }
-    await fs.promises.writeFile(filePath, content, 'utf8');
-}
-async function processWikiDirectory(directoryPath, context) {
-    const entries = await (0, fs_utils_1.getSortedEntries)(directoryPath);
-    for (const entry of entries) {
-        if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.md')) {
-            continue;
-        }
-        await processWikiFile(path.join(directoryPath, entry.name), context);
-    }
-    for (const entry of entries) {
-        if (!entry.isDirectory()) {
-            continue;
-        }
-        await processWikiDirectory(path.join(directoryPath, entry.name), context);
-    }
+    await visitMarkdownFiles(directoryPath, directories, async (sourceFilePath, fileName, fileDirectories) => {
+        await processSourceFile(sourceFilePath, fileName, fileDirectories, context);
+    });
 }
 
 

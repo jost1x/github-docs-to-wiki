@@ -5,7 +5,7 @@
   "main": "_init/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.json && ncc build dist/index.js -o _init",
-    "test": "npm run build && node --test tests/index.test.js"
+    "test": "npm run build && node --test tests/index.test.js tests/run.integration.test.js"
   },
   "author": "EBekker",
   "license": "MIT",

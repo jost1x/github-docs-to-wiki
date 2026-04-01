@@ -1,0 +1,12 @@
+default_stages:
+  - pre-commit
+
+repos:
+  - repo: local
+    hooks:
+      - id: repo-validation
+        name: repository validation
+        entry: sh scripts/pre-commit-checks.sh
+        language: system
+        pass_filenames: false
+        always_run: true

@@ -37,23 +37,44 @@ export async function writeLines(filePath: string, content: string[]): Promise<v
     await fs.promises.writeFile(filePath, joinLines(content), 'utf8');
 }
 
-async function removePath(targetPath: string): Promise<void> {
+async function clearPath(
+    targetPath: string,
+    keepNames: Set<string>,
+    shouldKeepPath?: (targetPath: string) => Promise<boolean>,
+): Promise<boolean> {
+    if (shouldKeepPath && (await shouldKeepPath(targetPath))) {
+        return true;
+    }
+
     const stats = await fs.promises.lstat(targetPath);
 
     if (stats.isDirectory() && !stats.isSymbolicLink()) {
         const entries = await fs.promises.readdir(targetPath);
+        let hasKeptChildren = false;
+
         for (const entry of entries) {
-            await removePath(path.join(targetPath, entry));
+            const childPath = path.join(targetPath, entry);
+            const kept = await clearPath(childPath, keepNames, shouldKeepPath);
+            hasKeptChildren = hasKeptChildren || kept;
+        }
+
+        if (hasKeptChildren) {
+            return true;
         }
 
         await fs.promises.rmdir(targetPath);
-        return;
+        return false;
     }
 
     await fs.promises.unlink(targetPath);
+    return false;
 }
 
-export async function clearDirectory(directoryPath: string, keepNames: Set<string>): Promise<void> {
+export async function clearDirectory(
+    directoryPath: string,
+    keepNames: Set<string>,
+    shouldKeepPath?: (targetPath: string) => Promise<boolean>,
+): Promise<void> {
     const entries = await fs.promises.readdir(directoryPath);
 
     for (const entry of entries) {
@@ -61,7 +82,7 @@ export async function clearDirectory(directoryPath: string, keepNames: Set<strin
             continue;
         }
 
-        await removePath(path.join(directoryPath, entry));
+        await clearPath(path.join(directoryPath, entry), keepNames, shouldKeepPath);
     }
 }
 
@@ -72,10 +93,6 @@ export async function getSortedEntries(directoryPath: string): Promise<fs.Dirent
 
 export function stripMarkdownExtension(fileName: string): string {
     return fileName.replace(/\.md$/iu, '');
-}
-
-export function replaceAllLiteral(value: string, search: string, replacement: string): string {
-    return value.split(search).join(replacement);
 }
 
 export function resolveRootDocsFolder(sourceRepoDirectory: string, rootDocsFolder: string): string {
