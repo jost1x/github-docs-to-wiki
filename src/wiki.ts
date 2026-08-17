@@ -7,6 +7,7 @@ import {
     addGeneratedMarker,
     buildManualWikiKeepSet,
     ensureWritableWikiTarget,
+    isManualPage,
 } from './wiki-manual';
 import { updateFileLinks } from './wiki-links';
 import {
@@ -21,6 +22,7 @@ const SOURCE_FILE_LINK_TOKEN = /\{sourceFileLink\}/g;
 export {
     addGeneratedMarker,
     buildManualWikiKeepSet,
+    isManualPage,
 } from './wiki-manual';
 export { updateFileLinks } from './wiki-links';
 export {

@@ -10,6 +10,15 @@ const EXTERNAL_LINK_REGEX = /^[a-z][a-z0-9+.-]*:/iu;
 export const GENERATED_WIKI_MARKER = '<!-- wiki:generated -->';
 export const KEEP_MANUAL_WIKI_MARKER = '<!-- wiki:keep-manual -->';
 
+export function isManualPage(content: string): boolean {
+    const firstNonEmptyLine = content
+        .replace(/^\uFEFF/u, '')
+        .split(/\r?\n/u)
+        .find((line) => line.trim() !== '');
+
+    return /^<!--\s*wiki:keep-manual\s*-->$/u.test(firstNonEmptyLine?.trim() ?? '');
+}
+
 async function pathStat(targetPath: string): Promise<import('fs').Stats | undefined> {
     try {
         return await fs.promises.lstat(targetPath);
@@ -83,7 +92,7 @@ export async function buildManualWikiKeepSet(wikiRepoPath: string): Promise<Set<
             }
 
             const content = await readLines(entryPath);
-            if (content.some((line) => line.includes(KEEP_MANUAL_WIKI_MARKER)) === false) {
+            if (!isManualPage(content.join('\n'))) {
                 continue;
             }
 
@@ -117,7 +126,7 @@ export async function ensureWritableWikiTarget(outputPath: string): Promise<void
     }
 
     const content = await readLines(outputPath);
-    if (content.some((line) => line.includes(KEEP_MANUAL_WIKI_MARKER))) {
+    if (isManualPage(content.join('\n'))) {
         throw new Error(
             `Wiki page ${path.basename(outputPath)} is marked with ${KEEP_MANUAL_WIKI_MARKER} and cannot be overwritten by sync`,
         );

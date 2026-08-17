@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.updateFileLinks = exports.getOutputFileNameFromPath = exports.convertToWikiFileName = exports.addGeneratedMarker = void 0;
+exports.updateFileLinks = exports.isManualPage = exports.getOutputFileNameFromPath = exports.convertToWikiFileName = exports.addGeneratedMarker = void 0;
 exports.run = run;
 const core = __importStar(require("@actions/core"));
 const path = __importStar(require("path"));
@@ -44,6 +44,7 @@ var wiki_2 = require("./wiki");
 Object.defineProperty(exports, "addGeneratedMarker", { enumerable: true, get: function () { return wiki_2.addGeneratedMarker; } });
 Object.defineProperty(exports, "convertToWikiFileName", { enumerable: true, get: function () { return wiki_2.convertToWikiFileName; } });
 Object.defineProperty(exports, "getOutputFileNameFromPath", { enumerable: true, get: function () { return wiki_2.getOutputFileNameFromPath; } });
+Object.defineProperty(exports, "isManualPage", { enumerable: true, get: function () { return wiki_2.isManualPage; } });
 Object.defineProperty(exports, "updateFileLinks", { enumerable: true, get: function () { return wiki_2.updateFileLinks; } });
 function getRequiredRepositoryName() {
     const repositoryName = process.env.GITHUB_REPOSITORY;

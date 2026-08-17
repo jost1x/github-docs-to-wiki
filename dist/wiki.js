@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getOutputFileNameFromPath = exports.convertToWikiFileName = exports.updateFileLinks = exports.buildManualWikiKeepSet = exports.addGeneratedMarker = void 0;
+exports.getOutputFileNameFromPath = exports.convertToWikiFileName = exports.updateFileLinks = exports.isManualPage = exports.buildManualWikiKeepSet = exports.addGeneratedMarker = void 0;
 exports.buildSourceFileMap = buildSourceFileMap;
 exports.processSourceDirectory = processSourceDirectory;
 const core = __importStar(require("@actions/core"));
@@ -46,6 +46,7 @@ const SOURCE_FILE_LINK_TOKEN = /\{sourceFileLink\}/g;
 var wiki_manual_2 = require("./wiki-manual");
 Object.defineProperty(exports, "addGeneratedMarker", { enumerable: true, get: function () { return wiki_manual_2.addGeneratedMarker; } });
 Object.defineProperty(exports, "buildManualWikiKeepSet", { enumerable: true, get: function () { return wiki_manual_2.buildManualWikiKeepSet; } });
+Object.defineProperty(exports, "isManualPage", { enumerable: true, get: function () { return wiki_manual_2.isManualPage; } });
 var wiki_links_2 = require("./wiki-links");
 Object.defineProperty(exports, "updateFileLinks", { enumerable: true, get: function () { return wiki_links_2.updateFileLinks; } });
 var wiki_paths_2 = require("./wiki-paths");

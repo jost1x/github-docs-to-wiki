@@ -44,7 +44,7 @@ This keeps naming deterministic and avoids relying on document headers for page 
 
 ## Manual Pages
 
-Add `<!-- wiki:keep-manual -->` anywhere in a wiki page to prevent the action from deleting it.
+Add `<!-- wiki:keep-manual -->` as the first non-empty line of a wiki page to prevent the action from deleting it. The marker must occupy that line by itself (aside from whitespace); occurrences in prose or code examples do not protect the page.
 
 Generated pages are tagged with `<!-- wiki:generated -->` automatically. If a generated page would overwrite a manual page marked with `<!-- wiki:keep-manual -->`, the sync fails with an error.
 

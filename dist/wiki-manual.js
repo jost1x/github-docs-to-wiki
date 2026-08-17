@@ -34,6 +34,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.KEEP_MANUAL_WIKI_MARKER = exports.GENERATED_WIKI_MARKER = void 0;
+exports.isManualPage = isManualPage;
 exports.addGeneratedMarker = addGeneratedMarker;
 exports.buildManualWikiKeepSet = buildManualWikiKeepSet;
 exports.ensureWritableWikiTarget = ensureWritableWikiTarget;
@@ -45,6 +46,13 @@ const HTML_SOURCE_ATTRIBUTE_REGEX = /\b(?:src|href)=["']([^"']+)["']/giu;
 const EXTERNAL_LINK_REGEX = /^[a-z][a-z0-9+.-]*:/iu;
 exports.GENERATED_WIKI_MARKER = '<!-- wiki:generated -->';
 exports.KEEP_MANUAL_WIKI_MARKER = '<!-- wiki:keep-manual -->';
+function isManualPage(content) {
+    const firstNonEmptyLine = content
+        .replace(/^\uFEFF/u, '')
+        .split(/\r?\n/u)
+        .find((line) => line.trim() !== '');
+    return /^<!--\s*wiki:keep-manual\s*-->$/u.test(firstNonEmptyLine?.trim() ?? '');
+}
 async function pathStat(targetPath) {
     try {
         return await fs.promises.lstat(targetPath);
@@ -102,7 +110,7 @@ async function buildManualWikiKeepSet(wikiRepoPath) {
                 continue;
             }
             const content = await (0, fs_utils_1.readLines)(entryPath);
-            if (content.some((line) => line.includes(exports.KEEP_MANUAL_WIKI_MARKER)) === false) {
+            if (!isManualPage(content.join('\n'))) {
                 continue;
             }
             keepPaths.add(entryPath);
@@ -128,7 +136,7 @@ async function ensureWritableWikiTarget(outputPath) {
         return;
     }
     const content = await (0, fs_utils_1.readLines)(outputPath);
-    if (content.some((line) => line.includes(exports.KEEP_MANUAL_WIKI_MARKER))) {
+    if (isManualPage(content.join('\n'))) {
         throw new Error(`Wiki page ${path.basename(outputPath)} is marked with ${exports.KEEP_MANUAL_WIKI_MARKER} and cannot be overwritten by sync`);
     }
 }

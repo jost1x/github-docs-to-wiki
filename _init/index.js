@@ -258,7 +258,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.updateFileLinks = exports.getOutputFileNameFromPath = exports.convertToWikiFileName = exports.addGeneratedMarker = void 0;
+exports.updateFileLinks = exports.isManualPage = exports.getOutputFileNameFromPath = exports.convertToWikiFileName = exports.addGeneratedMarker = void 0;
 exports.run = run;
 const core = __importStar(__nccwpck_require__(484));
 const path = __importStar(__nccwpck_require__(928));
@@ -269,6 +269,7 @@ var wiki_2 = __nccwpck_require__(921);
 Object.defineProperty(exports, "addGeneratedMarker", ({ enumerable: true, get: function () { return wiki_2.addGeneratedMarker; } }));
 Object.defineProperty(exports, "convertToWikiFileName", ({ enumerable: true, get: function () { return wiki_2.convertToWikiFileName; } }));
 Object.defineProperty(exports, "getOutputFileNameFromPath", ({ enumerable: true, get: function () { return wiki_2.getOutputFileNameFromPath; } }));
+Object.defineProperty(exports, "isManualPage", ({ enumerable: true, get: function () { return wiki_2.isManualPage; } }));
 Object.defineProperty(exports, "updateFileLinks", ({ enumerable: true, get: function () { return wiki_2.updateFileLinks; } }));
 function getRequiredRepositoryName() {
     const repositoryName = process.env.GITHUB_REPOSITORY;
@@ -476,6 +477,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.KEEP_MANUAL_WIKI_MARKER = exports.GENERATED_WIKI_MARKER = void 0;
+exports.isManualPage = isManualPage;
 exports.addGeneratedMarker = addGeneratedMarker;
 exports.buildManualWikiKeepSet = buildManualWikiKeepSet;
 exports.ensureWritableWikiTarget = ensureWritableWikiTarget;
@@ -487,6 +489,13 @@ const HTML_SOURCE_ATTRIBUTE_REGEX = /\b(?:src|href)=["']([^"']+)["']/giu;
 const EXTERNAL_LINK_REGEX = /^[a-z][a-z0-9+.-]*:/iu;
 exports.GENERATED_WIKI_MARKER = '<!-- wiki:generated -->';
 exports.KEEP_MANUAL_WIKI_MARKER = '<!-- wiki:keep-manual -->';
+function isManualPage(content) {
+    const firstNonEmptyLine = content
+        .replace(/^\uFEFF/u, '')
+        .split(/\r?\n/u)
+        .find((line) => line.trim() !== '');
+    return /^<!--\s*wiki:keep-manual\s*-->$/u.test(firstNonEmptyLine?.trim() ?? '');
+}
 async function pathStat(targetPath) {
     try {
         return await fs.promises.lstat(targetPath);
@@ -544,7 +553,7 @@ async function buildManualWikiKeepSet(wikiRepoPath) {
                 continue;
             }
             const content = await (0, fs_utils_1.readLines)(entryPath);
-            if (content.some((line) => line.includes(exports.KEEP_MANUAL_WIKI_MARKER)) === false) {
+            if (!isManualPage(content.join('\n'))) {
                 continue;
             }
             keepPaths.add(entryPath);
@@ -570,7 +579,7 @@ async function ensureWritableWikiTarget(outputPath) {
         return;
     }
     const content = await (0, fs_utils_1.readLines)(outputPath);
-    if (content.some((line) => line.includes(exports.KEEP_MANUAL_WIKI_MARKER))) {
+    if (isManualPage(content.join('\n'))) {
         throw new Error(`Wiki page ${path.basename(outputPath)} is marked with ${exports.KEEP_MANUAL_WIKI_MARKER} and cannot be overwritten by sync`);
     }
 }
@@ -692,7 +701,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getOutputFileNameFromPath = exports.convertToWikiFileName = exports.updateFileLinks = exports.buildManualWikiKeepSet = exports.addGeneratedMarker = void 0;
+exports.getOutputFileNameFromPath = exports.convertToWikiFileName = exports.updateFileLinks = exports.isManualPage = exports.buildManualWikiKeepSet = exports.addGeneratedMarker = void 0;
 exports.buildSourceFileMap = buildSourceFileMap;
 exports.processSourceDirectory = processSourceDirectory;
 const core = __importStar(__nccwpck_require__(484));
@@ -705,6 +714,7 @@ const SOURCE_FILE_LINK_TOKEN = /\{sourceFileLink\}/g;
 var wiki_manual_2 = __nccwpck_require__(244);
 Object.defineProperty(exports, "addGeneratedMarker", ({ enumerable: true, get: function () { return wiki_manual_2.addGeneratedMarker; } }));
 Object.defineProperty(exports, "buildManualWikiKeepSet", ({ enumerable: true, get: function () { return wiki_manual_2.buildManualWikiKeepSet; } }));
+Object.defineProperty(exports, "isManualPage", ({ enumerable: true, get: function () { return wiki_manual_2.isManualPage; } }));
 var wiki_links_2 = __nccwpck_require__(757);
 Object.defineProperty(exports, "updateFileLinks", ({ enumerable: true, get: function () { return wiki_links_2.updateFileLinks; } }));
 var wiki_paths_2 = __nccwpck_require__(760);

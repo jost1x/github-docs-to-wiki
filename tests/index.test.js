@@ -6,6 +6,7 @@ const path = require('node:path');
 
 const action = require('../_init/index.js');
 const wiki = require('../dist/wiki.js');
+const wikiManual = require('../dist/wiki-manual.js');
 
 async function withTempDirectory(run) {
     const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'github-docs-to-wiki-'));
@@ -65,6 +66,24 @@ test('generated wiki marker is not duplicated', () => {
     const content = ['<!-- wiki:generated -->', '', '# Titulo'];
 
     assert.deepEqual(action.addGeneratedMarker(content), content);
+});
+
+test('manual wiki marker is valid only as the first non-empty line', () => {
+    assert.equal(action.isManualPage('<!-- wiki:keep-manual -->\n\n# Manual'), true);
+    assert.equal(action.isManualPage('\uFEFF\n\n  <!-- wiki:keep-manual -->  \n# Manual'), true);
+    assert.equal(action.isManualPage('# Generated\n\nUse `<!-- wiki:keep-manual -->` to preserve pages.'), false);
+    assert.equal(action.isManualPage('# Generated\n\n```md\n<!-- wiki:keep-manual -->\n```'), false);
+    assert.equal(action.isManualPage('# Generated\n\nwiki:keep-manual'), false);
+    assert.equal(action.isManualPage('<!-- wiki:generated -->\n\n# Generated'), false);
+});
+
+test('generated wiki pages can be overwritten', async () => {
+    await withTempDirectory(async (directoryPath) => {
+        const outputPath = path.join(directoryPath, 'generated.md');
+        await fs.writeFile(outputPath, '<!-- wiki:generated -->\n\n# Generated\n', 'utf8');
+
+        await assert.doesNotReject(wikiManual.ensureWritableWikiTarget(outputPath));
+    });
 });
 
 test('updateFileLinks preserves anchors for markdown wiki links', () => {

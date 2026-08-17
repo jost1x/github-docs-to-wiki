@@ -10,6 +10,7 @@ import {
     addGeneratedMarker,
     convertToWikiFileName,
     getOutputFileNameFromPath,
+    isManualPage,
     processSourceDirectory,
     updateFileLinks,
 } from './wiki';
@@ -18,6 +19,7 @@ export {
     addGeneratedMarker,
     convertToWikiFileName,
     getOutputFileNameFromPath,
+    isManualPage,
     updateFileLinks,
 } from './wiki';
 
